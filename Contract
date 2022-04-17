@@ -1,0 +1,181 @@
+// SPDX-License-Identifier: MIT
+//Find better way of checking if voted already for milestone rather than iterating over all who have voted
+
+pragma solidity ^0.8.2;
+
+/*
+13-04-22 Axel de Baat
+This smart contract 
+*/
+contract Pharmaledger_Contract{
+   
+    event Proposal_made(address indexed, uint256 indexed,uint256, uint8, uint32); //Proposer, ID, Costs, Milestones
+    event Funding_delivered(address indexed,uint256 indexed, uint256); 
+    //event Vote_cast(address indexed, uint32 indexed);
+    //event Holovote_Cast(address indexed, uint256, uint256,bool); //voter, id, amount, favor
+    event Milestone_Unlocked(uint256 indexed, uint256, uint256);
+/*
+    uint32 public _proposalPhase;
+    uint32 public _votingPhase;
+    
+    uint256 public _totalFunds
+    */
+    //uint256 public _totalholovotes;
+    uint256 _remainingFunds;
+    uint128 public _fundSoftcap;
+    struct Proposal {
+        address proposer,
+        uint256 requested,
+        uint256 paid_out,
+        uint8 milestones,
+        uint32 duration,
+        uint256 msvotes,
+        bool[] mspayout,
+        //uint256 holovotes_for;
+        //uint256 holovotes_against;  
+        uint256 votes,
+        bool funded,
+        mapping(address => uint256) voters,
+        address[] has_voted
+    }
+    /*
+    struct Vote {
+        uint256 id;
+        uint256 total_votes;
+        uint256 
+    }
+    */
+    mapping(uint256 => Proposal) proposals;
+    mapping(address => uint256) votingPower;
+    mapping(address => uint256) totalFunded;
+    uint256[] prop_ids;
+    uint256 vote_end = block.number + _voteduration;
+    //uint256[] holovoted
+    //mapping(uint256 => uint256) votes
+
+//    constructor(uint256 voteduration_, fundsoftcap_) {
+
+ //   }
+    function Unlock_Milestone(uint256 prop_id){
+        Proposal prop = proposals[prop_id];
+        require(prop.mspayout < prop.milestones, "Unlock_Milestone: All milestones already paid out")
+        require(_checkVoted(prop, prop_id, msg.sender) == false,  "Unlock_Milestone:You have already voted this milestone")
+        require(prop.funded, "Unlock_Milestone: Proposal not funded");
+        require(block.number > vote_ended + (prop.duration / prop.milestones)* prop.mspayout.length, "Unlock_Milestone: Milestone not available yet");
+        prop.msvotes += prop.voters[msg.sender];
+        prop.has_voted.push(msg.sender);
+        if(prop.msvotes >= prop.requested/2){
+            prop.mspayout.push(true);
+            uint256 payment = prop.requested/prop.milestones;
+            require(prop.paid_out+payment =< prop.requested, "No milestones to pay out");
+            prop.paid_out += payment
+            emit Milestone_Unlocked(prop_id, block.number, prop.mspayout.length)
+            payable(prop.proposer).transfer(payment);
+            prop.has_voted = 0;
+            prop.msvotes = 0;
+
+        }
+        proposals[prop_id] = prop;
+    }
+    function _checkVoted(Proposal propo, uint256 prop_id, address voter) internal returns(bool){
+        for (i=0; i< propo.has_voted.length; i++){
+            if(propo.has_voted[i] == voter){
+                return true;
+            }
+        }
+        return false;
+    }
+    function Propose(string calldata _salt, uint256 _amountNeeded, uint8 milestones, uint32 _duration) public returns(uint256) {
+        
+        uint256 _id =  uint256(keccak256(abi.encode(msg.sender, _salt)));
+        Proposal memory _proposal = Proposal(msg.sender, _amountNeeded, milestones, _duration,0,0);
+        proposals[_id] = _proposal;
+        emit Proposal_made(msg.sender, _id,_amountNeeded, milestones, _duration);
+        prop_ids.push[_id];
+        return _id;
+    }
+    /*
+    function Holovote(uint256 _id, bool favor) public payable{
+        if(proposals[_id].holovotes_for == 0 && proposals[_id].holovotes_against == 0){
+            holovoted.push(_id)
+        }
+        favor ? proposals[_id].holovotes_for += msg.value :proposals[_id].holovotes_against += msg.value;
+        _totalholovotes += msg.value;
+        emit Holovote_Cast(msg.sender,_id, msg.value, favor);
+    }
+    */
+    function Fund() public payable{
+        require(vote_ended ==0, "Fund: Funding period is closed");
+        uint256 total_funded = _totalFunded[msg.sender] + msg.value;
+        if total_funded > _fundSoftcap{
+            uint256 quadratic = _totalFunded[msg.sender] < _fundSoftcap ? sqrt(total_funded - _fundSoftcap) : sqrt(msg.value);
+            uint256 voting_power =  quadratic + votingPower[msg.sender];
+        }
+        else{
+            voting_power = total_funded;
+        }
+        totalFunded[msg.sender] += msg.value;
+        votingPower[msg.sender] += voting_power;
+    }
+    function Vote(uint256 prop_id, uint256 amt) public{
+        require(vote_open, "Vote: Vote is closed");
+        require(votingPower[msg.sender] >= amt, "Vote: Not enough voting power");
+        require((proposals[prop_id].requested - proposals[prop_id].votes >= amt, "Vote: Cannot overfund proposal, allocate less votes.");
+        votingPower[msg.sender] -= amt;
+        proposals[prop_id].votes += amt;
+        proposals[prop_id].voters[msg.sender] += amt
+    }
+    function EndVote() public{
+        require(vote_end < block.number, "Funding round has not ended yet");
+        uint256[] _remainingProps;
+        uint256 _lowestRequested;
+
+        for (uint256 i = 0 ; i < prop_ids.length; i++) {
+            
+            Proposal proposal = proposals[prop_ids[i]]
+            if (proposal.votes > proposal.requested){
+                proposals[prop_ids[i]].funded = true;
+                _remainingFunds -= proposal.requested;
+            }
+            else{
+                if(proposal.requested =< _remainingFunds){
+                    uint256 vote_ratio = (proposal.votes*1000)/proposal.requested
+                    if( vote_ratio > 500){
+                        _remainingProps.push(prop_ids[i]);
+                        _lowestRequested = _lowestRequested > proposal.requested 
+                            ? proposal.requested : _lowestRequested;
+                        //_highestId = _highestRatio > vote_ratio ? _highestId : prop_ids[i];
+                    }
+                }
+            }
+        //_remainingFunds -= proposals[_highestId].requested;
+        //proposals[_highestId].funded = true;
+
+       
+        uint8 k;
+        while _lowestRequested < _remainingFunds{
+            if(proposals[_remainingProps[k]].funded == false){
+                if(proposals[_remainingProps[k]].requested =< _remainingFunds){
+                    _remainingFunds -= proposals[_remainingProps[k]].requested;
+                    proposals[_remainingProps[k]].funded = true;}
+                }
+            k += 1;
+            if (k >= _remaining_props.length){
+                break
+                }
+            }
+
+        uint256 vote_ended = block.number
+        }
+    }
+
+    function sqrt(uint256 x) pure returns (uint256) {
+        uint z = (x + 1) / 2;
+        y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        return y
+    }
+}
+}
