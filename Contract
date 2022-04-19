@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
 //Find better way of checking if voted already for milestone rather than iterating over all who have voted
 
+//replace block.number with block.timestamp
+//Make it accept stable coins
+//Implement holovotes
 pragma solidity ^0.8.2;
+
+// import {FractionalExponents} from "https://github.com/Muhammad-Altabba/solidity-toolbox/blob/master/contracts/FractionalExponents.sol";
 
 /*
 13-04-22 Axel de Baat
@@ -9,7 +14,7 @@ This smart contract
 */
 contract Pharmaledger_Contract{
    
-    event Proposal_made(address indexed, uint256 indexed,uint256, uint8, uint32); //Proposer, ID, Costs, Milestones
+    event Proposal_made(address indexed, uint256 indexed,uint32, uint8, uint64); //Proposer, ID, Costs, Milestones
     event Funding_delivered(address indexed,uint256 indexed, uint256); 
     //event Vote_cast(address indexed, uint32 indexed);
     //event Holovote_Cast(address indexed, uint256, uint256,bool); //voter, id, amount, favor
@@ -21,22 +26,24 @@ contract Pharmaledger_Contract{
     uint256 public _totalFunds
     */
     //uint256 public _totalholovotes;
-    uint256 _remainingFunds;
-    uint128 public _fundSoftcap;
+
     struct Proposal {
-        address proposer,
-        uint256 requested,
-        uint256 paid_out,
-        uint8 milestones,
-        uint32 duration,
-        uint256 msvotes,
-        bool[] mspayout,
+        bool funded;
+        uint8 milestones;
+        address proposer;
+        uint32 requested;
+        uint32 paid_out;
+        uint32 msvotes;
+        uint32 votes;
+        uint64 msduration;
+        bool[] mspayout;
+        address[] has_voted;
         //uint256 holovotes_for;
         //uint256 holovotes_against;  
-        uint256 votes,
-        bool funded,
-        mapping(address => uint256) voters,
-        address[] has_voted
+        mapping(address => uint32) voters;
+        
+        
+        
     }
     /*
     struct Vote {
@@ -46,52 +53,98 @@ contract Pharmaledger_Contract{
     }
     */
     mapping(uint256 => Proposal) proposals;
-    mapping(address => uint256) votingPower;
-    mapping(address => uint256) totalFunded;
+    mapping(address => uint32) votingPower;
+    mapping(address => uint32) totalFunded;
+    uint256[] _remainingProps;
     uint256[] prop_ids;
-    uint256 vote_end = block.number + _voteduration;
+    uint64 public _voteduration;
+    uint64 public vote_end;
+    uint32 public _remainingFunds;
+    uint32 public _fundSoftcap;
+    uint32 public _remainingVotes;
+    //bool vote_open;
     //uint256[] holovoted
     //mapping(uint256 => uint256) votes
 
-//    constructor(uint256 voteduration_, fundsoftcap_) {
+    constructor(uint64 voteduration_, uint32 fundsoftcap_) {
+        _voteduration = voteduration_;
+        _fundSoftcap = fundsoftcap_;
+        vote_end = toUint64(block.number) + voteduration_;
+    }
+    function getVotingpower(address voter)public view returns(uint32){
+        return votingPower[voter];
+    }
+    function getAmountfunded(address funder)public view returns(uint32){
+        return totalFunded[funder];
+    }
+    function getFundingstatus(uint256 id) public view returns(bool){
+        return proposals[id].funded;
+    }
+    function getFundingrequested(uint256 id) public view returns(uint32){
+        return proposals[id].requested;
+    }
+    function getProplength(uint256 id) public view returns(uint256){
+        return proposals[id].mspayout.length;
+    }
+    function getMilestones(uint256 id) public view returns(uint8){
+        return proposals[id].milestones;
+    }
+    function Refund() public returns(uint32){
+        require(vote_end < block.number, "Refund: Funding round has not ended yet");
+        uint32 amt = _remainingFunds*(votingPower[msg.sender]*100/_remainingVotes)/100;
+        require(amt>0,"Refund: Nothing to refund");
+        _remainingVotes -= votingPower[msg.sender];
+        votingPower[msg.sender] = 0;
+        _remainingVotes -= amt;
+        payable(msg.sender).transfer(amt);
+        return amt;
+    }
 
- //   }
-    function Unlock_Milestone(uint256 prop_id){
-        Proposal prop = proposals[prop_id];
-        require(prop.mspayout < prop.milestones, "Unlock_Milestone: All milestones already paid out")
-        require(_checkVoted(prop, prop_id, msg.sender) == false,  "Unlock_Milestone:You have already voted this milestone")
-        require(prop.funded, "Unlock_Milestone: Proposal not funded");
-        require(block.number > vote_ended + (prop.duration / prop.milestones)* prop.mspayout.length, "Unlock_Milestone: Milestone not available yet");
-        prop.msvotes += prop.voters[msg.sender];
-        prop.has_voted.push(msg.sender);
-        if(prop.msvotes >= prop.requested/2){
-            prop.mspayout.push(true);
-            uint256 payment = prop.requested/prop.milestones;
-            require(prop.paid_out+payment =< prop.requested, "No milestones to pay out");
-            prop.paid_out += payment
-            emit Milestone_Unlocked(prop_id, block.number, prop.mspayout.length)
-            payable(prop.proposer).transfer(payment);
-            prop.has_voted = 0;
-            prop.msvotes = 0;
+    function Unlock_Milestone(uint256 prop_id) public{
+        Proposal storage pr = proposals[prop_id];
+        require(pr.mspayout.length < pr.milestones, "Unlock_Milestone: All milestones already paid out");
+        //require(_checkVoted(pr, msg.sender) == false,  "Unlock_Milestone:You have already voted this milestone");
+        require(pr.funded, "Unlock_Milestone: Proposal not funded");
+        require(block.number > vote_end + pr.msduration * pr.mspayout.length, "Unlock_Milestone: Milestone not available yet");
+        require(pr.voters[msg.sender] > 0, "Unlock_Milestone: Not a funder.");
+        pr.msvotes += pr.voters[msg.sender];
+        pr.has_voted.push(msg.sender);
+        if(pr.msvotes >= (pr.requested/2)){
+            uint32 payment = pr.requested/pr.milestones;
+            require((pr.paid_out+payment) <= pr.requested, "No milestones to pay out");
+            pr.mspayout.push(true);
+            pr.paid_out += payment;
+            emit Milestone_Unlocked(prop_id, toUint64(block.number), pr.mspayout.length);
+            payable(pr.proposer).transfer(payment);
+            delete pr.has_voted;
+            pr.msvotes = 0;
 
         }
-        proposals[prop_id] = prop;
     }
-    function _checkVoted(Proposal propo, uint256 prop_id, address voter) internal returns(bool){
-        for (i=0; i< propo.has_voted.length; i++){
+    /*
+    function _checkVoted(Proposal storage propo, address voter) internal view returns(bool){
+        for (uint32 i=0; i< propo.has_voted.length; i++){
             if(propo.has_voted[i] == voter){
                 return true;
             }
         }
         return false;
     }
-    function Propose(string calldata _salt, uint256 _amountNeeded, uint8 milestones, uint32 _duration) public returns(uint256) {
-        
+    */
+    function Propose(string calldata _salt, uint32 _amountNeeded, uint8 milestones, uint64 _msduration) public returns(uint256) {
+        require(vote_end > block.number, "Propose: Funding round ended");
         uint256 _id =  uint256(keccak256(abi.encode(msg.sender, _salt)));
-        Proposal memory _proposal = Proposal(msg.sender, _amountNeeded, milestones, _duration,0,0);
-        proposals[_id] = _proposal;
-        emit Proposal_made(msg.sender, _id,_amountNeeded, milestones, _duration);
-        prop_ids.push[_id];
+        Proposal storage pr = proposals[_id];
+        //Proposal memory _proposal = Proposal(msg.sender, _amountNeeded, milestones, _duration,0,0);
+        
+        pr.proposer = msg.sender;
+        pr.requested = _amountNeeded;
+        pr.msduration = _msduration;
+        pr.milestones = milestones;
+        
+        
+        emit Proposal_made(msg.sender, _id,_amountNeeded, milestones, _msduration);
+        prop_ids.push(_id);
         return _id;
     }
     /*
@@ -105,41 +158,44 @@ contract Pharmaledger_Contract{
     }
     */
     function Fund() public payable{
-        require(vote_ended ==0, "Fund: Funding period is closed");
-        uint256 total_funded = _totalFunded[msg.sender] + msg.value;
-        if total_funded > _fundSoftcap{
-            uint256 quadratic = _totalFunded[msg.sender] < _fundSoftcap ? sqrt(total_funded - _fundSoftcap) : sqrt(msg.value);
-            uint256 voting_power =  quadratic + votingPower[msg.sender];
+        require(vote_end > block.number, "Fund: Funding period is closed");
+        uint32 total_funded = totalFunded[msg.sender] + toUint32(msg.value);
+        uint32 voting_power;
+        if (total_funded > _fundSoftcap){
+            uint32 quadratic = sqrt(total_funded - _fundSoftcap);
+            voting_power = quadratic + _fundSoftcap;
         }
         else{
             voting_power = total_funded;
         }
-        totalFunded[msg.sender] += msg.value;
-        votingPower[msg.sender] += voting_power;
+        totalFunded[msg.sender] += toUint32(msg.value);
+        _remainingVotes += voting_power - votingPower[msg.sender];
+        votingPower[msg.sender] = voting_power;
+        _remainingFunds += toUint32(msg.value);
+        
     }
-    function Vote(uint256 prop_id, uint256 amt) public{
-        require(vote_open, "Vote: Vote is closed");
+    function Vote(uint256 prop_id, uint32 amt) public{
+        require(vote_end > block.number, "Vote: Funding round ended");
         require(votingPower[msg.sender] >= amt, "Vote: Not enough voting power");
-        require((proposals[prop_id].requested - proposals[prop_id].votes >= amt, "Vote: Cannot overfund proposal, allocate less votes.");
+        require((proposals[prop_id].requested - proposals[prop_id].votes) >= amt, "Vote: Cannot overfund proposal, allocate less votes.");
         votingPower[msg.sender] -= amt;
         proposals[prop_id].votes += amt;
-        proposals[prop_id].voters[msg.sender] += amt
+        proposals[prop_id].voters[msg.sender] += amt;
     }
     function EndVote() public{
         require(vote_end < block.number, "Funding round has not ended yet");
-        uint256[] _remainingProps;
-        uint256 _lowestRequested;
+        uint32 _lowestRequested;
 
-        for (uint256 i = 0 ; i < prop_ids.length; i++) {
+        for (uint16 i = 0 ; i < prop_ids.length; i++) {
             
-            Proposal proposal = proposals[prop_ids[i]]
-            if (proposal.votes > proposal.requested){
+            Proposal storage proposal = proposals[prop_ids[i]];
+            if (proposal.votes == proposal.requested){
                 proposals[prop_ids[i]].funded = true;
                 _remainingFunds -= proposal.requested;
             }
             else{
-                if(proposal.requested =< _remainingFunds){
-                    uint256 vote_ratio = (proposal.votes*1000)/proposal.requested
+                if(proposal.requested <= _remainingFunds){
+                    uint32 vote_ratio = (proposal.votes*1000)/proposal.requested;
                     if( vote_ratio > 500){
                         _remainingProps.push(prop_ids[i]);
                         _lowestRequested = _lowestRequested > proposal.requested 
@@ -152,30 +208,43 @@ contract Pharmaledger_Contract{
         //proposals[_highestId].funded = true;
 
        
-        uint8 k;
-        while _lowestRequested < _remainingFunds{
+        uint16 k;
+        while (_lowestRequested < _remainingFunds){
             if(proposals[_remainingProps[k]].funded == false){
-                if(proposals[_remainingProps[k]].requested =< _remainingFunds){
+                if(proposals[_remainingProps[k]].requested <= _remainingFunds){
                     _remainingFunds -= proposals[_remainingProps[k]].requested;
                     proposals[_remainingProps[k]].funded = true;}
                 }
             k += 1;
-            if (k >= _remaining_props.length){
-                break
+            if (k >= _remainingProps.length){
+                break;
                 }
             }
 
-        uint256 vote_ended = block.number
+        //uint256 vote_endtime = block.number;
         }
     }
 
-    function sqrt(uint256 x) pure returns (uint256) {
-        uint z = (x + 1) / 2;
-        y = x;
-        while (z < y) {
-            y = z;
-            z = (x / z + z) / 2;
-        return y
+    function sqrt(uint32 y) pure public returns (uint32 z) {
+        if (y > 3) {
+            z = y;
+            uint32 x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+                }
+        } else if (y != 0) {
+        z = 1;
+        }
     }
-}
+
+    function toUint32(uint256 value) private pure returns (uint32) {
+        require(value <= type(uint32).max, "value doesn't fit in 32 bits");
+        return uint32(value);
+    }
+    function toUint64(uint256 value) private pure returns (uint64) {
+        require(value <= type(uint64).max, "value doesn't fit in 32 bits");
+        return uint64(value);
+    }
+
 }
