@@ -114,7 +114,7 @@ contract Pharmaledger_Contract{
         require(vote_ended+(prop.msduration*prop.milestones)+liq_time > block.number, "LiquidateProposal: Not yet able to return funds");
         require(prop.voters[msg.sender] > 0, "LiquidateProposal: Not a funder");
         prop.liquidated = true; // Prevent further unlocking of milestones
-        uint256 refund = (prop.voters[msg.sender]*prop.mspayout.length)/prop.milestones;
+        uint256 refund = (prop.voters[msg.sender]*(prop.milestones-prop.mspayout.length)/prop.milestones;
         prop.voters[msg.sender] = 0; // subtract remaining voting power
         payable(msg.sender).transfer(refund);
 
@@ -256,7 +256,7 @@ contract Pharmaledger_Contract{
         return uint64(value);
     }
     // From: https://github.com/Muhammad-Altabba/solidity-toolbox/blob/master/contracts/FractionalExponents.sol
-
+    //Power function to calculate fractional exponent powers for 
     uint256 private constant ONE = 1;
     uint32 private constant MAX_WEIGHT = 1000000;
     uint8 private constant MIN_PRECISION = 32;
