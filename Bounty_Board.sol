@@ -11,7 +11,14 @@ Testing results:
 pragma solidity ^0.8.2;
 
 contract Bounty_Board{
-
+    /*
+    interface Token {
+        function transfer() public;
+    }
+    constructor(address token_){
+        _token = token_;
+    }
+    */
     event Bounty_Posted(address indexed, uint256 indexed,uint256); //Proposer, ID, Costs, Milestones
     event Bounty_Funded(address indexed, uint256 indexed, uint256); // Funder, amount, new voting power
     //event Vote_cast(address indexed, uint256 indexed, uint256, uint256);
@@ -26,13 +33,15 @@ contract Bounty_Board{
             uint256 reward;  //Amount of funding needed to implement proposal
             uint256 paid_out;   //How much funding has already been paid out
             uint256 funded;
-            uint256 msvotes;    //Votes per milestone to release funds (gets reset each milestone)
-            bool[] mspayout;    //List that tracks each milestone paid out by adding another entry
-            address[] has_voted; // Tracks which funders have already voted
+            mapping(uint256 => uint256) msvotes;    //Votes per milestone to release funds (gets reset each milestone)
+            mapping(uint256 => bool) mspayout;    //List that tracks each milestone paid out by adding another entry
+            mapping(address => mapping(uint256 => bool)) has_voted; // Tracks which funders have already voted
             mapping(address => uint256) funders; // Tracks voting power of funders
             uint256[] msvalues;
         }
     mapping(uint256 => Bounty) bounties; //Datastructure containing all Bounties
+
+    
     function Refund_Bounty(uint256 prop_id) public{ 
         Bounty storage bt = bounties[prop_id];
         require(bt.funded > 0, "Refund_Bounty: Proposal not funded");
@@ -45,23 +54,22 @@ contract Bounty_Board{
         emit Bounty_Refunded(prop_id, msg.sender, refund);
     }
 
-    function Unlock_Milestone(uint256 prop_id, address bene) public{
+    function Unlock_Milestone(uint256 prop_id, uint256 msno, address bene) public{
         Bounty storage bt = bounties[prop_id];
-        uint256 btnr = bt.mspayout.length;
+        
         require(bt.liquidated == false,"Unlock_Milestone: Proposal liquidated");
-        require(btnr < bt.msvalues.length, "Unlock_Milestone: All milestones already paid out");
-        require(_checkVoted(bt, msg.sender) == false,  "Unlock_Milestone:You have already voted this milestone");
-        require(bt.funded>= bt.paid_out+bt.msvalues[btnr] , "Unlock_Milestone: Proposal not enough funding");
+        require(msno <= bt.msvalues.length, "Unlock_Milestone: Invalid Milestone No");
+        require(bt.has_voted[msg.sender][msno] == false,  "Unlock_Milestone:You have already voted this milestone");
+        require(bt.funded>= bt.paid_out+bt.msvalues[msno -1] , "Unlock_Milestone: Proposal not enough funding");
         require(bt.funders[msg.sender] > 0, "Unlock_Milestone: Not a funder.");
-        bt.msvotes += bt.funders[msg.sender]; // Add voters votes to milestone total
-        bt.has_voted.push(msg.sender);  // Prevent double voting
-        if(bt.msvotes > (bt.funded/2)){ // Initiate transfer of funds after milestone quorum is reached
-            bt.mspayout.push(true);     //Add milestone completed
-            bt.paid_out += bt.msvalues[btnr];     //Add payment to total paid out balance 
-            emit Milestone_Unlocked(prop_id, block.number, btnr);
-            delete bt.has_voted;        // Reset Voted list for next milestone
-            bt.msvotes = 0;             // Reset votes for new milestone
-            payable(bene).transfer(bt.msvalues[btnr]);
+        require(bt.mspayout[msno] == false, "Unlock_Milestone: Milestone already paid out");
+        bt.msvotes[msno] += bt.funders[msg.sender]; // Add voters votes to milestone total
+        bt.has_voted[msg.sender][msno] == true;  // Prevent double voting
+        if(bt.msvotes[msno] > (bt.funded/2)){ // Initiate transfer of funds after milestone quorum is reached
+            bt.mspayout[msno] = true;     //Add milestone completed
+            bt.paid_out += bt.msvalues[msno-1];     //Add payment to total paid out balance 
+            emit Milestone_Unlocked(prop_id, block.number, msno);
+            payable(bene).transfer(bt.msvalues[msno-1]);
         }
     }
 
@@ -99,15 +107,6 @@ contract Bounty_Board{
         return sum; 
     }
 
-    
-    function _checkVoted(Bounty storage bt, address voter) internal view returns(bool){
-        for (uint16 i=0; i< bt.has_voted.length; i++){
-            if(bt.has_voted[i] == voter){
-                return true;
-            }
-        }
-        return false;
-    }
     function toUint64(uint256 value) private pure returns (uint64) {
         require(value <= type(uint64).max, "value doesn't fit in 32 bits");
         return uint64(value);
