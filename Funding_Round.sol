@@ -10,8 +10,10 @@ Fund with 0.6 exponent and 2x softcap funding: 216623 gas
 
 */
 
-//replace block.number with block.timestamp
+
 //Make it accept stable coins
+//Make variable milestone rewards possible
+//Change minutes to days for final deployment
 
 pragma solidity ^0.8.2;
 
@@ -19,26 +21,27 @@ pragma solidity ^0.8.2;
 13-04-22 Axel de Baat
 
 */
-contract Pharmaledger_Contract{
+contract Funding_Round{
    
-    event Proposal_made(address indexed, uint256 indexed,uint256, uint8, uint64); //Proposer, ID, Costs, Milestones
-    event Funding_Added(address indexed,uint64,uint256, uint256); // Funder, Time, amount, new voting power
-    event Vote_cast(address indexed, uint256 indexed, uint256, uint256);
-    event Milestone_Unlocked(uint256 indexed, uint256, uint256); //Proposal Id, Block, Milestone Nr
-    event Vote_Ended(uint64); // Block where vote ended
-
+    event Proposal_made(address indexed, uint256 indexed,uint256, uint256); //Proposer, ID, Costs, Milestones
+    event Funding_Added(address indexed,uint256, uint256); // Funder, Time, amount, new voting power
+    event Vote_cast(address indexed, uint256 indexed, uint256);
+    event Milestone_Unlocked(uint256 indexed, uint256); //Proposal Id, Block, Milestone Nr
+    event Vote_Ended(uint64); // UNIX Time where vote ended
+    event Refunding(address, uint256); //Refunder and amount
+    event Liquidation(uint256, address);
     struct Proposal {
         bool funded;        //funding assigned by end_vote function
         bool liquidated;    //Modified by liquidate_proposal
-        uint8 milestones;   //Specified by user
+        uint256[] milestones;   //Specified by user
         address proposer;   //Address of user - address funding will be sent to
         uint256 requested;  //Amount of funding needed to implement proposal
         uint256 paid_out;   //How much funding has already been paid out
-        uint256 msvotes;    //Votes per milestone to release funds (gets reset each milestone)
+        mapping(uint256 => uint256) msvotes;    //Votes per milestone to release funds (gets reset each milestone)
         uint256 votes;      //Votes in favor of funding proposal
         uint64 msduration;  //Specified by user
         bool[] mspayout;    //List that tracks each milestone paid out by adding another entry
-        address[] has_voted; // Tracks which funders have already voted
+        mapping(uint256 => mapping (address => bool)) has_voted; // Tracks which funders have already voted
         mapping(address => uint256) voters; // Tracks voting power of funders
     }
     mapping(uint256 => Proposal) proposals; //Datastructure containing all proposals
@@ -62,13 +65,13 @@ contract Pharmaledger_Contract{
     
     
 
-    constructor(uint64 voteduration_, uint256 fundsoftcap_, uint256 dangerzone_, uint64 propduration_, uint64 liqtime_, uint8 exp_) {
-        _voteduration = voteduration_;                      //Duration of voting phase
-        _propduration = propduration_;                      //Duration of proposal phase
+    constructor(uint64 vote_mins, uint256 fundsoftcap_, uint256 dangerzone_, uint64 prop_mins, uint64 liqtime_days, uint8 exp_) {
+        _voteduration = vote_mins *60;                      //Duration of voting phase
+        _propduration = prop_mins *60;                      //Duration of proposal phase
         _fundSoftcap = fundsoftcap_;                        //Funding Soft Cap
-        prop_end = toUint64(block.number) + _propduration;  // Block nr where proposal phase ends
-        vote_end =  prop_end + voteduration_;               // Block nr where voting phase ends
-        liq_time = liqtime_;                                // Blocks after milestones expire that funders can liquidate remaining funds
+        prop_end = toUint64(block.timestamp) + _propduration;  // Block nr where proposal phase ends
+        vote_end =  prop_end + _voteduration;               // Block nr where voting phase ends
+        liq_time = liqtime_days *60*60*24;                                // Blocks after milestones expire that funders can liquidate remaining funds
         _exp = exp_;                                        // Exponent of root function (base 10)
         _mult = determineMult();                             // Multiplication in: votingpower(fund) = (fund**exp/10) * _mult
         danger_zone = dangerzone_;                          // Dangerzone over softcap where VP function returns >1 vote per unit funded
@@ -93,76 +96,65 @@ contract Pharmaledger_Contract{
     function getPayouts(uint256 id) public view returns(uint256){
         return proposals[id].mspayout.length;
     }
-    function getMilestones(uint256 id) public view returns(uint8){
-        return proposals[id].milestones;
+    function getMilestones(uint256 id) public view returns(uint256){
+        return proposals[id].milestones.length;
     }
     // Refund function that distributes remaining funds based on remaining unused voting power
-    function Refund() public returns(uint256){
+    function Refund() public{
         require(vote_ended > 0, "Refund: Funding round has not ended yet");                 
-        uint256 amt = _remainingFunds*(votingPower[msg.sender]*100/_remainingVotes)/100; //Calculates refund owed based on fraction of remaining voting power
+        uint256 amt = _remainingFunds*(votingPower[msg.sender]*100000/_remainingVotes)/100000; //Calculates refund owed based on fraction of remaining voting power
         require(amt>0,"Refund: Nothing to refund");
         _remainingVotes -= votingPower[msg.sender];
+        _remainingFunds -= amt;
         votingPower[msg.sender] = 0;
-        _remainingVotes -= amt;
         payable(msg.sender).transfer(amt);
-        return amt;
+        emit Refunding(msg.sender, amt);
     }
     //Function to return funds left in proposal if proposal duration is expired and funders no longer wish to give developers funds
     function LiquidateProposal(uint256 prop_id) public{ 
         Proposal storage prop = proposals[prop_id];
         require(prop.funded, "LiquidateProposal: Proposal not funded");
-        require(vote_ended+(prop.msduration*prop.milestones)+liq_time > block.number, "LiquidateProposal: Not yet able to return funds");
+        require(vote_ended+(prop.msduration*prop.milestones.length)+liq_time > block.timestamp, "LiquidateProposal: Not yet able to return funds");
         require(prop.voters[msg.sender] > 0, "LiquidateProposal: Not a funder");
         prop.liquidated = true; // Prevent further unlocking of milestones
-        uint256 refund = (prop.voters[msg.sender]*(prop.milestones-prop.mspayout.length)/prop.milestones;
+        uint256 refund = (prop.voters[msg.sender]*(prop.milestones.length-prop.mspayout.length)/prop.milestones.length);
         prop.voters[msg.sender] = 0; // subtract remaining voting power
         payable(msg.sender).transfer(refund);
+        emit Liquidation(prop_id, msg.sender);
 
 
     }
     function Unlock_Milestone(uint256 prop_id) public{
         Proposal storage pr = proposals[prop_id];
+        uint256 msnr = pr.mspayout.length;
         require(pr.liquidated == false,"Unlock_Milestone: Proposal liquidated");
-        require(pr.mspayout.length < pr.milestones, "Unlock_Milestone: All milestones already paid out");
-        require(_checkVoted(pr, msg.sender) == false,  "Unlock_Milestone:You have already voted this milestone");
+        require(pr.mspayout.length < pr.milestones.length, "Unlock_Milestone: All milestones already paid out");
+        require(pr.has_voted[msnr][msg.sender] == false, "Unlock_Milestone:You have already voted this milestone");
         require(pr.funded, "Unlock_Milestone: Proposal not funded");
-        require(block.number > vote_ended + pr.msduration * pr.mspayout.length, "Unlock_Milestone: Milestone not available yet");
+        require(block.timestamp > vote_ended + pr.msduration * pr.mspayout.length, "Unlock_Milestone: Milestone not available yet");
         require(pr.voters[msg.sender] > 0, "Unlock_Milestone: Not a funder.");
-        pr.msvotes += pr.voters[msg.sender]; // Add voters votes to milestone total
-        pr.has_voted.push(msg.sender);  // Prevent double voting
-        if(pr.msvotes >= (pr.votes/2)){ // Initiate transfer of funds after milestone quorum is reached
-            uint256 payment = pr.requested/pr.milestones; // Calculate milestone payout
-            require((pr.paid_out+payment) <= pr.requested, "No milestones to pay out"); // To prevent Giving out too much (might be redundant)
+        pr.msvotes[msnr] += pr.voters[msg.sender]; // Add voters votes to milestone total
+        pr.has_voted[msnr][msg.sender] = true;  // Prevent double voting
+        if(pr.msvotes[msnr] > (pr.votes/2)){ // Initiate transfer of funds after milestone quorum is reached
             pr.mspayout.push(true);     //Add milestone completed
-            pr.paid_out += payment;     //Add payment to total paid out balance 
-            emit Milestone_Unlocked(prop_id, block.number, pr.mspayout.length);
-            payable(pr.proposer).transfer(payment);
-            delete pr.has_voted;        // Reset Voted list for next milestone
-            pr.msvotes = 0;             // Reset votes for new milestone
-
+            pr.paid_out += pr.milestones[msnr];     //Add payment to total paid out balance 
+            emit Milestone_Unlocked(prop_id, pr.mspayout.length);
+            payable(pr.proposer).transfer(pr.milestones[msnr]);
         }
-    }
-    // Internal function that checks the milestone voted list to prevent double voting
-    function _checkVoted(Proposal storage propo, address voter) internal view returns(bool){
-        for (uint16 i=0; i< propo.has_voted.length; i++){
-            if(propo.has_voted[i] == voter){
-                return true;
-            }
-        }
-        return false;
     }
     //Function that generates proposal struct and adds it to proposals list
-    function Propose(string calldata _salt, uint256 _amountNeeded, uint8 milestones, uint64 _msduration) public returns(uint256) {
-        require(prop_end > block.number, "Propose: Funding round ended");
+    function Propose(string calldata _salt, uint256 _amountNeeded, uint256[] calldata milestones, uint64 _msminduration) public returns(uint256) {
+        require(prop_end > block.timestamp, "Propose: Funding round ended");
+        require(_sumMilestones(milestones) == _amountNeeded, "Propose: Funding required doesn't match milestones");
         uint256 _id =  uint256(keccak256(abi.encode(msg.sender, _salt))); //Create unique proposal id
         Proposal storage pr = proposals[_id];   //Create new Proposal struct mapped to proposal Id
         pr.proposer = msg.sender;               //Add several parameters based on input
         pr.requested = _amountNeeded;
-        pr.msduration = _msduration;
+        pr.msduration = _msminduration*60;
         pr.milestones = milestones;
         
         
-        emit Proposal_made(msg.sender, _id,_amountNeeded, milestones, _msduration);
+        emit Proposal_made(msg.sender, _id,_amountNeeded, _msminduration);
         prop_ids.push(_id);                     
         return _id;
     }
@@ -171,7 +163,7 @@ contract Pharmaledger_Contract{
     //Dimishes funding above softcap through a sqrt function partially parameterized by constructor
     //Danger zone refers to area where sqrt function returns voting power> funding when multiplication is used in the function
     function Fund() public payable{
-        require(vote_end > block.number, "Fund: Funding period is closed"); //Technically optional
+        require(vote_end > block.timestamp, "Fund: Funding period is closed"); //Technically optional
         uint256 total_funded = totalFunded[msg.sender] + msg.value;
         uint256 voting_power;
         
@@ -191,19 +183,19 @@ contract Pharmaledger_Contract{
         _remainingVotes += diff;                                //Add differential to total voting power (for future returns)
         votingPower[msg.sender] = voting_power;                 //Store new voting power balance
         _remainingFunds += msg.value;                 //Add new funds to total funds balance
-        emit Funding_Added(msg.sender, toUint64(block.number),msg.value, diff);
+        emit Funding_Added(msg.sender, msg.value, diff);
     }
 
     //Voting function that allows allocation of voting power gained by providing funds to proposals
     function Vote(uint256 prop_id, uint256 amt) public{
-        require(vote_end > block.number && prop_end < block.number, "Vote: Currently no voting round");
+        require(vote_end > block.timestamp && prop_end < block.timestamp, "Vote: Currently no voting round");
         require(votingPower[msg.sender] >= amt, "Vote: Not enough voting power");
         require((proposals[prop_id].requested - proposals[prop_id].votes) >= amt, "Vote: Cannot overfund proposal, allocate less votes.");
         votingPower[msg.sender] -= amt;    
         proposals[prop_id].votes += amt;    //Add to total vote balance(needed for end_vote algorithm)
         proposals[prop_id].voters[msg.sender] += amt;   //Add voter specific balance (needed for milestone unlocking)
         _remainingVotes -= amt; // Subtract cast votes from total voting pool (for refund purposes)
-        emit Vote_cast(msg.sender, prop_id, uint64(block.number), amt);
+        emit Vote_cast(msg.sender, prop_id, amt);
     }
 
     // Function that ends voting period and decides which proposals get funded while optimizing capital allocation
@@ -212,7 +204,7 @@ contract Pharmaledger_Contract{
     // Function then iterates over all remaining proposals ordered by first submission checking if enough _remainingfunds are left to fully fund proposal
     // Function will stop once _remainingFunds are used up
     function EndVote() public{
-        require(vote_end < block.number, "Funding round has not ended yet");
+        require(vote_end < block.timestamp, "Funding round has not ended yet");
         uint256 _lowestRequested;
 
         for (uint16 i = 0 ; i < prop_ids.length; i++) {
@@ -224,8 +216,8 @@ contract Pharmaledger_Contract{
             }
             else{
                 if(proposal.requested <= _remainingFunds){ // check if enough funds are left
-                    uint256 vote_ratio = (proposal.votes*1000)/proposal.requested;
-                    if( vote_ratio > 500){ //Check if more than 50% of votes are received
+                    uint256 vote_ratio = (proposal.votes*1000000000)/proposal.requested;
+                    if( vote_ratio > 500000000){ //Check if more than 50% of votes are received
                         _remainingProps.push(prop_ids[i]); // Add to remaining props list
                         _lowestRequested = _lowestRequested > proposal.requested // Save the minimal amount needed to fund a proposal
                             ? proposal.requested : _lowestRequested;
@@ -247,8 +239,15 @@ contract Pharmaledger_Contract{
                 }
             }
         }
-        vote_ended = uint64(block.number); //Save endblock of vote
+        vote_ended = uint64(block.timestamp); //Save endblock of vote
         emit Vote_Ended(vote_ended);
+    }
+    function _sumMilestones(uint256[] memory mstones)internal pure returns (uint256) {
+        uint256 sum;
+        for (uint8 i=0; i< mstones.length; i++){
+            sum += mstones[i];
+        }
+        return sum; 
     }
 
     function toUint64(uint256 value) private pure returns (uint64) {
@@ -256,7 +255,7 @@ contract Pharmaledger_Contract{
         return uint64(value);
     }
     // From: https://github.com/Muhammad-Altabba/solidity-toolbox/blob/master/contracts/FractionalExponents.sol
-    //Power function to calculate fractional exponent powers for 
+    //Power function to calculate fractional exponent powers for voting power function
     uint256 private constant ONE = 1;
     uint32 private constant MAX_WEIGHT = 1000000;
     uint8 private constant MIN_PRECISION = 32;
