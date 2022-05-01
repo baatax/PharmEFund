@@ -1,20 +1,5 @@
 // SPDX-License-Identifier: MIT
 /*
-Testing results:
-15 >50% voted contracts -> End vote was 573807 gas
-Tested Milestones -> Everything works accordingly
-Contract deployment is 4867951 Gas
-Fund with 0.6 exponent and 2x softcap funding: 216623 gas
-
-
-
-*/
-
-
-//Make it accept stable coins
-//Make variable milestone rewards possible
-//Change minutes to days for final deployment
-/*
 13-04-22 Axel de Baat
 
 */
