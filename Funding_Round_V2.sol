@@ -52,18 +52,19 @@ contract Funding_Round{
     uint256 public _remainingVotes;         //Total votes that have not been cast
     uint256 public danger_zone;             //Point after which funding function stops returning voting(funds) > funds
     uint256 public _mult;                   //Multiplication factor for funding = (_fundSoftcap)**0.3
-    uint8 public _exp;                      //Numerator for exponent of root function (base 10)
-    
+    uint8 public _exp;                      //Numerator for exponent of root function (base 100)
+    uint8 public _mulpexp;                  //Numerator for multiplication exponent of root function (base 100)
     
 
-    constructor(address token_,uint64 vote_mins, uint256 fundsoftcap_, uint256 dangerzone_, uint64 prop_mins, uint64 liqtime_mins, uint8 exp_) {
+    constructor(address token_,uint64 vote_mins, uint256 fundsoftcap_, uint256 dangerzone_, uint64 prop_mins, uint64 liqtime_mins, uint8 exp_, uint8 mulpexp_) {
         _voteduration = vote_mins *60;                      //Duration of voting phase
         _propduration = prop_mins *60;                      //Duration of proposal phase
         _fundSoftcap = fundsoftcap_;                        //Funding Soft Cap
         prop_end = toUint64(block.timestamp) + _propduration;  // Block nr where proposal phase ends
         vote_end =  prop_end + _voteduration;               // Block nr where voting phase ends
         liq_time = liqtime_mins *60;                                // Blocks after milestones expire that funders can liquidate remaining funds
-        _exp = exp_;                                        // Exponent of root function (base 10)
+        _mulpexp = mulpexp_;                                // Exponent of multiplcation term in root function (base 100)
+        _exp = exp_;                                        // Exponent of root function (base 100)
         _mult = determineMult();                             // Multiplication in: votingpower(fund) = (fund**exp/10) * _mult
         danger_zone = dangerzone_;                          // Dangerzone over softcap where VP function returns >1 vote per unit funded
         _token = token_;                                    //Assign address of Pharmatoken
@@ -71,7 +72,7 @@ contract Funding_Round{
 
     //Calculates multiplication factor for voting power function by: (_fundSoftcap)**0.3
     function determineMult() internal view returns(uint256){ 
-        (uint256 pwr,uint8 prec) = power(_fundSoftcap, 1, 3, 10); // Function returns Large number/ 2**Precision as output
+        (uint256 pwr,uint8 prec) = power(_fundSoftcap, 1, _mulpexp, 100); // Function returns Large number/ 2**Precision as output
         return pwr/(2**prec);
     }
     function getVotingpower(address voter)public view returns(uint256){
@@ -163,7 +164,7 @@ contract Funding_Round{
             require (total_funded > (_fundSoftcap+danger_zone), "Fund: Funding in danger zone, fund more");
             uint256 pwr;
             uint8 prec;
-            (pwr, prec) = power((total_funded - _fundSoftcap), 1, _exp, 10); // Function returns Large number/ 2**Precision as output
+            (pwr, prec) = power((total_funded - _fundSoftcap), 1, _exp, 100); // Function returns Large number/ 2**Precision as output
             uint256 quadratic = (pwr/2**prec)*_mult;  // Actual result is calculated
             voting_power = quadratic + _fundSoftcap;
         }
