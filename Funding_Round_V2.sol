@@ -29,12 +29,12 @@ interface Token {
 
 contract Funding_Round{
    
-    event Proposal_made(address indexed, uint256 indexed,uint256); //Proposer, ID, Costs, Milestones
-    event Funding_Added(address indexed,uint256, uint256); // Funder, Time, amount, new voting power
-    event Vote_cast(address indexed, uint256 indexed, uint256);
-    event Milestone_Unlocked(uint256 indexed, uint256); //Proposal Id, Block, Milestone Nr
-    event Refunding(address, uint256); //Refunder and amount
-    event Vote_Ended(uint64); // UNIX Time where vote ended
+    event Proposal_made(address indexed Proposer_address, uint256 indexed Proposal_id,uint256); //Proposer, ID, Costs, Milestones
+    event Funding_Added(address indexed Funder_address,uint256, uint256); // Funder, Time, amount, new voting power
+    event Vote_cast(address indexed Voter_address, uint256 indexed Proposal_id, uint256);
+    event Milestone_Unlocked(uint256 indexed Proposal_id, uint256 Milestone_Nr); //Proposal Id, Milestone Nr
+    event Refunding(address Refunder, uint256 Amount); //Refunder and amount
+    event Vote_Ended(uint64 Vote_Ending); // UNIX Time where vote ended
 
     struct Proposal {
         bool funded;        //funding assigned by end_vote function
@@ -53,8 +53,8 @@ contract Funding_Round{
     mapping(address => uint256) votingPower;//Actual voting power per address
     mapping(address => uint256) totalFunded;//Funding in the pool supplied by specific address
     uint256[] _remainingProps;              //List of half-funded projects populated by end_vote
-    uint256[] prop_ids;                     //List of all the proposal_ids, used by End_vote to iterate over
-    address _token;
+    uint256[] public prop_ids;                     //List of all the proposal_ids, used by End_vote to iterate over
+    address public _token;
     uint64 public _voteduration;
     uint64 public _propduration;
     uint64 public vote_end;
