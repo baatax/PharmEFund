@@ -20,11 +20,10 @@ contract Bounty_Board{
         _token = token_;
     }
     
-    event Bounty_Posted(address indexed, uint256 indexed,uint256); //Proposer, ID, Costs, Milestones
-    event Bounty_Funded(address indexed, uint256 indexed, uint256); // Funder, amount, new voting power
-    //event Vote_cast(address indexed, uint256 indexed, uint256, uint256);
-    event Milestone_Unlocked(uint256 indexed, uint256); //Proposal Id, Block, Milestone Nr
-    event Bounty_Refunded(uint256 indexed, address indexed, uint256); // Block where vote ended
+    event Bounty_Posted(address indexed Poster, uint256 indexed Bounty_ID,uint256 Reward); 
+    event Bounty_Funded(address indexed Funder, uint256 indexed Bounty_ID,uint256 Funding); 
+    event Milestone_Unlocked(uint256 indexed Bounty_ID, uint256 Milestone_Nr); 
+    event Bounty_Refunded(uint256 indexed Bounty_ID, address indexed Refunder, uint256 Amount); 
 
 
     struct Bounty {
@@ -54,6 +53,7 @@ contract Bounty_Board{
         uint256 fract = (bt.funders[msg.sender] * 1000000000) / bt.funded;
         uint256 refund = (fract*(bt.funded - bt.paid_out))/100000000;
         bt.funders[msg.sender] = 0; // subtract remaining voting power
+        bt.funded -= refund;
         Token(_token).transfer(msg.sender,refund);
         emit Bounty_Refunded(bt_id, msg.sender, refund);
     }
