@@ -153,7 +153,7 @@ contract Funding_Round{
     //Funding function that converts funding to voting power
     //Dimishes funding above softcap through a sqrt function partially parameterized by constructor
     //Danger zone refers to area where sqrt function returns voting power> funding when multiplication is used in the function
-    function Fund(uint256 amt) public payable{
+    function Fund(uint256 amt) public {
         require(vote_end > block.timestamp, "Fund: Funding period is closed"); //Technically optional
         require(Token(_token).increaseAllowance(address(this),amt), "Fund: Allowance failed");
         require(Token(_token).transferFrom(msg.sender, address(this),amt), "Fund: Transfer Failed");
