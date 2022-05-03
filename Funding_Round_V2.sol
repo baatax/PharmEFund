@@ -15,25 +15,25 @@ interface Token {
 contract Funding_Round{
    
     event Proposal_made(address indexed Proposer_address, uint256 indexed Proposal_id,uint256); //Proposer, ID, Costs, Milestones
-    event Funding_Added(address indexed Funder_address,uint256, uint256); // Funder, Time, amount, new voting power
-    event Vote_cast(address indexed Voter_address, uint256 indexed Proposal_id, uint256);
+    event Funding_Added(address indexed Funder_address,uint256 Funding, uint256 Voting_power); // Funder, Time, amount, new voting power
+    event Vote_cast(address indexed Voter_address, uint256 indexed Proposal_id, uint256 Voting_power);
     event Milestone_Unlocked(uint256 indexed Proposal_id, uint256 Milestone_Nr); //Proposal Id, Milestone Nr
     event Refunding(address Refunder, uint256 Amount); //Refunder and amount
     event Vote_Ended(uint64 Vote_Ending); // UNIX Time where vote ended
 
     struct Proposal {
-        uint64 time_needed;  //Time needed in seconds
-        bool funded;        //funding assigned by end_vote function
-        bool liquidated;    //Modified by liquidate_proposal
-        uint256[] milestones;   //Specified by user
-        address proposer;   //Address of user - address funding will be sent to
-        uint256 requested;  //Amount of funding needed to implement proposal
-        uint256 paid_out;   //How much funding has already been paid out
-        mapping(uint256 => uint256) msvotes;    //Votes per milestone to release funds (gets reset each milestone)
-        uint256 votes;      //Votes in favor of funding proposal
-        bool[] mspayout;    //List that tracks each milestone paid out by adding another entry
-        mapping(uint256 => mapping (address => bool)) has_voted; // Tracks which funders have already voted
-        mapping(address => uint256) voters; // Tracks voting power of funders
+        uint64 time_needed;                                         //Time needed in seconds
+        bool funded;                                                //funding assigned by end_vote function
+        bool liquidated;                                            //Modified by liquidate_proposal
+        uint256[] milestones;                                       //Specified by user
+        address proposer;                                           //Address of user - address funding will be sent to
+        uint256 requested;                                          //Amount of funding needed to implement proposal
+        uint256 paid_out;                                           //How much funding has already been paid out
+        mapping(uint256 => uint256) msvotes;                        //Votes per milestone to release funds (gets reset each milestone)
+        uint256 votes;                                              //Votes in favor of funding proposal
+        bool[] mspayout;                                            //List that tracks each milestone paid out by adding another entry
+        mapping(uint256 => mapping (address => bool)) has_voted;    //Tracks which funders have already voted
+        mapping(address => uint256) voters;                         // Tracks voting power of funders
     }
     mapping(uint256 => Proposal) public proposals; //Datastructure containing all proposals
     mapping(address => uint256) public votingPower;//Actual voting power per address
@@ -57,9 +57,9 @@ contract Funding_Round{
     uint8 public _mulpexp;                  //Numerator for multiplication exponent of root function (base 100)
     
 
-    constructor(address token_,uint64 vote_mins, uint256 fundsoftcap_, uint256 dangerzone_, uint64 prop_mins, uint8 exp_, uint8 mulpexp_) {
-        _voteduration = vote_mins *60;                      //Duration of voting phase
-        _propduration = prop_mins *60;                      //Duration of proposal phase
+    constructor(address token_,uint64 votemins_, uint256 fundsoftcap_, uint256 dangerzone_, uint64 propmins_, uint8 exp_, uint8 mulpexp_) {
+        _voteduration = votemins_ *60;                      //Duration of voting phase
+        _propduration = propmins_ *60;                      //Duration of proposal phase
         _fundSoftcap = fundsoftcap_;                        //Funding Soft Cap
         prop_end = toUint64(block.timestamp) + _propduration;  // Block nr where proposal phase ends
         vote_end =  prop_end + _voteduration;               // Block nr where voting phase ends
@@ -79,7 +79,7 @@ contract Funding_Round{
     // Refund function that distributes remaining funds based on remaining unused voting power
     function Refund() public {
         require(vote_ended > 0, "Refund: Funding round has not ended yet");                 
-        uint256 amt = _remainingFunds*(votingPower[msg.sender]*100000/_remainingVotes)/100000; //Calculates refund owed based on fraction of remaining voting power
+        uint256 amt = (_remainingFunds*(votingPower[msg.sender]*100000/_remainingVotes))/100000; //Calculates refund owed based on fraction of remaining voting power
         require(amt>0,"Refund: Nothing to refund");
         _remainingVotes -= votingPower[msg.sender];
         _remainingFunds -= amt;
@@ -94,7 +94,7 @@ contract Funding_Round{
         require(vote_ended+prop.time_needed > block.timestamp, "LiquidateProposal: Not yet able to return funds");
         require(prop.voters[msg.sender] > 0, "LiquidateProposal: Not a funder");
         prop.liquidated = true; // Prevent further unlocking of milestones
-        uint256 refund = (prop.voters[msg.sender]*(prop.milestones.length-prop.mspayout.length)/prop.milestones.length);
+        uint256 refund = (_remainingFunds*(prop.voters[msg.sender]*100000/prop.votes))/100000;
         prop.voters[msg.sender] = 0; // subtract remaining voting power
         Token(_token).transfer(msg.sender,refund);
 
@@ -118,14 +118,14 @@ contract Funding_Round{
         }
     }
     //Function that generates proposal struct and adds it to proposals list
-    function Propose(string calldata _salt, uint256 _amountNeeded, uint64 _timeneededmins, uint256[] calldata milestones) public returns(uint256) {
+    function Propose(string calldata _salt, uint256 _amountNeeded, uint64 _timeneededmins, uint256[] calldata _milestones) public returns(uint256) {
         require(prop_end > block.timestamp, "Propose: Funding round ended");
-        require(_sumMilestones(milestones) == _amountNeeded, "Propose: Funding required doesn't match milestones");
+        require(_sumMilestones(_milestones) == _amountNeeded, "Propose: Funding required doesn't match milestones");
         uint256 _id =  uint256(keccak256(abi.encode(msg.sender, _salt))); //Create unique proposal id
         Proposal storage pr = proposals[_id];   //Create new Proposal struct mapped to proposal Id
         pr.proposer = msg.sender;               //Add several parameters based on input
         pr.requested = _amountNeeded;
-        pr.milestones = milestones;
+        pr.milestones = _milestones;
         pr.time_needed = _timeneededmins *60;
         
         
@@ -138,7 +138,7 @@ contract Funding_Round{
     //Dimishes funding above softcap through a sqrt function partially parameterized by constructor
     //Danger zone refers to area where sqrt function returns voting power> funding when multiplication is used in the function
     function Fund(uint256 amt) public{
-        require(vote_end > block.timestamp, "Fund: Funding period is closed"); //Technically optional
+        require(prop_end > block.timestamp, "Fund: Funding period is closed"); //Technically optional
         require(Token(_token).increaseAllowance(address(this),amt), "Fund: Allowance failed");
         require(Token(_token).transferFrom(msg.sender, address(this),amt), "Fund: Transfer Failed");
         uint256 total_funded = totalFunded[msg.sender] + amt;
