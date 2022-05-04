@@ -34,6 +34,7 @@ contract Funding_Round{
         bool[] mspayout;                                            //List that tracks each milestone paid out by adding another entry
         mapping(uint256 => mapping (address => bool)) has_voted;    //Tracks which funders have already voted
         mapping(address => uint256) voters;                         // Tracks voting power of funders
+        address[] voted;                                            //Iterable list that tracks who voted on the proposal   
     }
     mapping(uint256 => Proposal) public proposals; //Datastructure containing all proposals
     mapping(address => uint256) public votingPower;//Actual voting power per address
@@ -76,54 +77,13 @@ contract Funding_Round{
         return pwr/(2**prec);
     }
 
-    // Refund function that distributes remaining funds based on remaining unused voting power
-    function Refund() public {
-        require(vote_ended > 0, "Refund: Funding round has not ended yet");                 
-        uint256 amt = (_remainingFunds*(votingPower[msg.sender]*100000/_remainingVotes))/100000; //Calculates refund owed based on fraction of remaining voting power
-        require(amt>0,"Refund: Nothing to refund");
-        _remainingVotes -= votingPower[msg.sender];
-        _remainingFunds -= amt;
-        votingPower[msg.sender] = 0;
-        Token(_token).transfer(msg.sender,amt);
-        emit Refunding(msg.sender, amt);
-    }
-    //Function to return funds left in proposal if proposal duration is expired and funders no longer wish to give developers funds
-    function LiquidateProposal(uint256 prop_id) public{ 
-        Proposal storage prop = proposals[prop_id];
-        require(prop.funded, "LiquidateProposal: Proposal not funded");
-        require(vote_ended+prop.time_needed > block.timestamp, "LiquidateProposal: Not yet able to return funds");
-        require(prop.voters[msg.sender] > 0, "LiquidateProposal: Not a funder");
-        prop.liquidated = true; // Prevent further unlocking of milestones
-        uint256 refund = (_remainingFunds*(prop.voters[msg.sender]*100000/prop.votes))/100000;
-        prop.voters[msg.sender] = 0; // subtract remaining voting power
-        Token(_token).transfer(msg.sender,refund);
-
-
-    }
-    function Unlock_Milestone(uint256 prop_id) public{
-        Proposal storage pr = proposals[prop_id];
-        uint256 msnr = pr.mspayout.length;
-        require(pr.liquidated == false,"Unlock_Milestone: Proposal liquidated");
-        require(pr.mspayout.length < pr.milestones.length, "Unlock_Milestone: All milestones already paid out");
-        require(pr.has_voted[msnr][msg.sender] == false, "Unlock_Milestone:You have already voted this milestone");
-        require(pr.funded, "Unlock_Milestone: Proposal not funded");
-        require(pr.voters[msg.sender] > 0, "Unlock_Milestone: Not a funder.");
-        pr.msvotes[msnr] += pr.voters[msg.sender]; // Add voters votes to milestone total
-        pr.has_voted[msnr][msg.sender] = true;  // Prevent double voting
-        if(pr.msvotes[msnr] > (pr.votes/2)){ // Initiate transfer of funds after milestone vote majority is reached
-            pr.mspayout.push(true);     //Add milestone completed
-            pr.paid_out += pr.milestones[msnr];     //Add payment to total paid out balance 
-            emit Milestone_Unlocked(prop_id, pr.mspayout.length);
-            require(Token(_token).transfer(pr.proposer,pr.milestones[msnr]), "Unlock_Milestone: Transfer Failed.");
-        }
-    }
     //Function that generates proposal struct and adds it to proposals list
     function Propose(string calldata _salt, uint256 _amountNeeded, uint64 _timeneededmins, uint256[] calldata _milestones) public returns(uint256) {
         require(prop_end > block.timestamp, "Propose: Funding round ended");
         require(_sumMilestones(_milestones) == _amountNeeded, "Propose: Funding required doesn't match milestones");
         uint256 _id =  uint256(keccak256(abi.encode(msg.sender, _salt))); //Create unique proposal id
         Proposal storage pr = proposals[_id];   //Create new Proposal struct mapped to proposal Id
-        pr.proposer = msg.sender;               //Add several parameters based on input
+        pr.proposer = msg.sender;               //Add several parameters based to proposal based on input
         pr.requested = _amountNeeded;
         pr.milestones = _milestones;
         pr.time_needed = _timeneededmins *60;
@@ -165,13 +125,15 @@ contract Funding_Round{
 
     //Voting function that allows allocation of voting power gained by providing funds to proposals
     function Vote(uint256 prop_id, uint256 amt) public{
+        Proposal storage pr = proposals[prop_id];
         require(vote_end > block.timestamp && prop_end < block.timestamp, "Vote: Currently no voting round");
         require(votingPower[msg.sender] >= amt, "Vote: Not enough voting power");
-        require((proposals[prop_id].requested - proposals[prop_id].votes) >= amt, "Vote: Cannot overfund proposal, allocate less votes.");
+        require((pr.requested - pr.votes) >= amt, "Vote: Cannot overfund proposal, allocate less votes.");
         votingPower[msg.sender] -= amt;    
-        proposals[prop_id].votes += amt;    //Add to total vote balance(needed for end_vote algorithm)
-        proposals[prop_id].voters[msg.sender] += amt;   //Add voter specific balance (needed for milestone unlocking)
+        pr.votes += amt;    //Add to total vote balance(needed for end_vote algorithm)
+        pr.voters[msg.sender] += amt;   //Add voter specific balance (needed for milestone unlocking)
         _remainingVotes -= amt; // Subtract cast votes from total voting pool (for refund purposes)
+        pr.voted.push(msg.sender);
         emit Vote_cast(msg.sender, prop_id, amt);
     }
 
@@ -214,6 +176,50 @@ contract Funding_Round{
         vote_ended = uint64(block.timestamp); //Save endtime of vote
         emit Vote_Ended(vote_ended);
     }
+
+    // Refund function that distributes remaining funds based on remaining unused voting power
+    function Refund() public {
+        require(vote_ended > 0, "Refund: Funding round has not ended yet");                 
+        uint256 amt = (_remainingFunds*(votingPower[msg.sender]*100000/_remainingVotes))/100000; //Calculates refund owed based on fraction of remaining voting power
+        require(amt>0,"Refund: Nothing to refund");
+        _remainingVotes -= votingPower[msg.sender];
+        _remainingFunds -= amt;
+        votingPower[msg.sender] = 0;
+        Token(_token).transfer(msg.sender,amt);
+        emit Refunding(msg.sender, amt);
+    }
+
+    function Unlock_Milestone(uint256 prop_id) public{
+        Proposal storage pr = proposals[prop_id];
+        uint256 msnr = pr.mspayout.length;
+        require(pr.liquidated == false,"Unlock_Milestone: Proposal liquidated");
+        require(pr.mspayout.length < pr.milestones.length, "Unlock_Milestone: All milestones already paid out");
+        require(pr.has_voted[msnr][msg.sender] == false, "Unlock_Milestone:You have already voted this milestone");
+        require(pr.funded, "Unlock_Milestone: Proposal not funded");
+        require(pr.voters[msg.sender] > 0, "Unlock_Milestone: Not a funder.");
+        pr.msvotes[msnr] += pr.voters[msg.sender]; // Add voters votes to milestone total
+        pr.has_voted[msnr][msg.sender] = true;  // Prevent double voting
+        if(pr.msvotes[msnr] > (pr.votes/2)){ // Initiate transfer of funds after milestone vote majority is reached
+            pr.mspayout.push(true);     //Add milestone completed
+            pr.paid_out += pr.milestones[msnr];     //Add payment to total paid out balance 
+            emit Milestone_Unlocked(prop_id, pr.mspayout.length);
+            require(Token(_token).transfer(pr.proposer,pr.milestones[msnr]), "Unlock_Milestone: Transfer Failed.");
+        }
+    }
+    //Function to return funds left in proposal if proposal duration is expired and funders no longer wish to give developers funds
+    function LiquidateProposal(uint256 prop_id) public{ 
+        Proposal storage prop = proposals[prop_id];
+        require(prop.funded, "LiquidateProposal: Proposal not funded");
+        require(vote_ended+prop.time_needed > block.timestamp, "LiquidateProposal: Not yet able to return funds");
+        require(prop.voters[msg.sender] > 0, "LiquidateProposal: Not a funder");
+        prop.liquidated = true; // Prevent further unlocking of milestones
+        uint256 refund = (_remainingFunds*(prop.voters[msg.sender]*100000/prop.votes))/100000; // Calculate Refund
+        prop.voters[msg.sender] = 0; // subtract remaining voting power
+        Token(_token).transfer(msg.sender,refund);
+
+
+    }
+    //Function to that sums up the milestone array so it can be compared to fundingRequired
     function _sumMilestones(uint256[] memory mstones)internal pure returns (uint256) {
         uint256 sum;
         for (uint8 i=0; i< mstones.length; i++){
@@ -221,7 +227,18 @@ contract Funding_Round{
         }
         return sum; 
     }
+    //Function for getting value of individual milestone
+    function getMilestones(uint256 prop_id, uint256 idx) public view returns(uint256){
+        Proposal storage prop = proposals[prop_id];
+        return prop.milestones[idx];
+    }
+    // Function for getting proposal voters
+    function getVoter(uint256 prop_id, uint256 idx) public view returns(address){
+        Proposal storage prop = proposals[prop_id];
+        return prop.voted[idx];
+    }
 
+    //Casting function to prevent overflow
     function toUint64(uint256 value) private pure returns (uint64) {
         require(value <= type(uint64).max, "value doesn't fit in 32 bits");
         return uint64(value);
