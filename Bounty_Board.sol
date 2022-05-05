@@ -1,10 +1,5 @@
 // SPDX-License-Identifier: MIT
-/*
-Testing results:
-
-*/
-
-//Make it refund to multiple parties
+//Axel de Baat
 
 pragma solidity ^0.8.2;
 interface Token {
@@ -27,55 +22,19 @@ contract Bounty_Board{
 
 
     struct Bounty {
-            bool liquidated;    //Modified by liquidate_proposal
+            bool liquidated;                                        //Modified by liquidate_proposal
             uint64 start;
-            uint64 duration;   //Specified by user
-            uint256 reward;  //Amount of funding needed to implement proposal
-            uint256 paid_out;   //How much funding has already been paid out
+            uint64 duration;                                        //Specified by user
+            uint256 reward;                                         //Amount of funding needed to implement proposal
+            uint256 paid_out;                                       //How much funding has already been paid out
             uint256 funded;
-            mapping(uint256 => uint256) msvotes;    //Votes per milestone to release funds (gets reset each milestone)
-            mapping(uint256 => bool) mspayout;    //List that tracks each milestone paid out by adding another entry
+            mapping(uint256 => uint256) msvotes;                    //Votes per milestone to release funds (gets reset each milestone)
+            mapping(uint256 => bool) mspayout;                      //List that tracks each milestone paid out by adding another entry
             mapping(address => mapping(uint256 => bool)) has_voted; // Tracks which funders have already voted
-            mapping(address => uint256) funders; // Tracks voting power of funders
+            mapping(address => uint256) funders;                    // Tracks voting power of funders
             uint256[] msvalues;
         }
     mapping(uint256 => Bounty) bounties; //Datastructure containing all Bounties
-
-    function getBountyend(uint256 bt_id) public view returns(uint64){
-        Bounty storage bt = bounties[bt_id];
-        return bt.start+bt.duration;
-    }
-    function Refund_Bounty(uint256 bt_id) public{ 
-        Bounty storage bt = bounties[bt_id];
-        require(bt.funded > 0, "Refund_Bounty: Proposal not funded");
-        require((bt.duration+bt.start) < block.timestamp, "Refund_Bounty: Not yet able to return funds");
-        require(bt.funders[msg.sender] > 0, "Refund_Bounty: Not a funder");
-        uint256 fract = (bt.funders[msg.sender] * 1000000000) / bt.funded;
-        uint256 refund = (fract*(bt.funded - bt.paid_out))/100000000;
-        bt.funders[msg.sender] = 0; // subtract remaining voting power
-        bt.funded -= refund;
-        Token(_token).transfer(msg.sender,refund);
-        emit Bounty_Refunded(bt_id, msg.sender, refund);
-    }
-
-    function Unlock_Milestone(uint256 prop_id, uint256 msno, address bene) public{
-        Bounty storage bt = bounties[prop_id];
-        
-        require(bt.liquidated == false,"Unlock_Milestone: Proposal liquidated");
-        require(msno <= bt.msvalues.length, "Unlock_Milestone: Invalid Milestone No");
-        require(bt.has_voted[msg.sender][msno] == false,  "Unlock_Milestone:You have already voted this milestone");
-        require(bt.funded>= bt.paid_out+bt.msvalues[msno -1] , "Unlock_Milestone: Proposal not enough funding");
-        require(bt.funders[msg.sender] > 0, "Unlock_Milestone: Not a funder.");
-        require(bt.mspayout[msno] == false, "Unlock_Milestone: Milestone already paid out");
-        bt.msvotes[msno] += bt.funders[msg.sender]; // Add voters votes to milestone total
-        bt.has_voted[msg.sender][msno] == true;  // Prevent double voting
-        if(bt.msvotes[msno] > (bt.funded/2)){ // Initiate transfer of funds after milestone quorum is reached
-            bt.mspayout[msno] = true;     //Add milestone completed
-            bt.paid_out += bt.msvalues[msno-1];     //Add payment to total paid out balance 
-            emit Milestone_Unlocked(prop_id, msno);
-            Token(_token).transfer(bene, bt.msvalues[msno-1]);
-        }
-    }
 
 
     function Post_Bounty(string calldata _salt, uint64 days_duration, uint256 _reward, uint256[] calldata _msvalues, uint256 stake) public returns(uint256) {
@@ -106,7 +65,39 @@ contract Bounty_Board{
         emit Bounty_Funded(msg.sender, _id, amt);
     }
     
-    
+    function Unlock_Milestone(uint256 prop_id, uint256 msno, address bene) public{
+        Bounty storage bt = bounties[prop_id];
+        
+        require(bt.liquidated == false,"Unlock_Milestone: Proposal liquidated");
+        require(msno <= bt.msvalues.length, "Unlock_Milestone: Invalid Milestone No");
+        require(bt.has_voted[msg.sender][msno] == false,  "Unlock_Milestone:You have already voted this milestone");
+        require(bt.funded>= bt.paid_out+bt.msvalues[msno -1] , "Unlock_Milestone: Bounty not enough funding");
+        require(bt.funders[msg.sender] > 0, "Unlock_Milestone: Not a funder.");
+        require(bt.mspayout[msno] == false, "Unlock_Milestone: Milestone already paid out");
+        bt.msvotes[msno] += bt.funders[msg.sender]; // Add voters votes to milestone total
+        bt.has_voted[msg.sender][msno] == true;  // Prevent double voting
+        
+        if(bt.msvotes[msno] > (bt.funded/2)){ // Initiate transfer of funds after milestone quorum is reached
+            bt.mspayout[msno] = true;     //Add milestone completed
+            bt.paid_out += bt.msvalues[msno-1];     //Add payment to total paid out balance 
+            emit Milestone_Unlocked(prop_id, msno);
+            Token(_token).transfer(bene, bt.msvalues[msno-1]);
+        }
+    }    
+
+    function Refund_Bounty(uint256 bt_id) public{ 
+        Bounty storage bt = bounties[bt_id];
+        require(bt.funded > 0, "Refund_Bounty: Proposal not funded");
+        require((bt.duration+bt.start) < block.timestamp, "Refund_Bounty: Not yet able to return funds");
+        require(bt.funders[msg.sender] > 0, "Refund_Bounty: Not a funder");
+        uint256 fract = (bt.funders[msg.sender] * 1000000) / bt.funded;
+        uint256 refund = (fract*(bt.funded - bt.paid_out))/1000000;
+        bt.funders[msg.sender] = 0; // subtract remaining voting power
+        bt.funded -= refund;
+        Token(_token).transfer(msg.sender,refund);
+        emit Bounty_Refunded(bt_id, msg.sender, refund);
+    }
+
 
     function _sumMilestones(uint256[] memory mstones)internal pure returns (uint256) {
         uint256 sum;
